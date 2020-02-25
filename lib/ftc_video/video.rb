@@ -18,9 +18,16 @@ module FtcVideo
       files.any? { |f| f.include?(time, duration) }
     end
 
+    def video_file_at(time, duration = 0)
+      files.find { |f| f.include?(time, duration) }
+    end
+
     def extract_video(output_filename, time, duration, **options)
-      file = files.find { |f| f.include?(time, duration) }
-      file&.extract(output_filename, time, duration, **options)
+      video_file_at(time, duration)&.extract(output_filename, time, duration, **options)
+    end
+
+    def screenshot(output_filename, time)
+      video_file_at(time)&.screenshot(output_filename, time)
     end
 
     def match_filename_prefix(match)

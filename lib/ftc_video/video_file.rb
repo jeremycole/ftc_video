@@ -30,7 +30,6 @@ module FtcVideo
 
     def extract_at(output_filename, offset, duration, **options)
       transcode_options = {
-        seek_time: offset,
         duration: duration
       }
 
@@ -39,7 +38,7 @@ module FtcVideo
         transcode_options[:audio_codec] = 'copy'
       end
 
-      movie.transcode(output_filename, **transcode_options)
+      movie.transcode(output_filename, transcode_options, { input_options: { ss: offset.to_s } })
     end
 
     def extract(output_filename, time, duration, **options)

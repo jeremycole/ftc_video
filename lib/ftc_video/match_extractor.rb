@@ -21,6 +21,7 @@ module FtcVideo
       extract_videos: false,
       extract_result_images: false,
       extract_result_videos: false,
+      produce_final_videos: false,
       copy: false,
       seconds_before_match_start: 10,
       seconds_match_length: 150,
@@ -41,6 +42,7 @@ module FtcVideo
         opts.on('-e', '--[no-]extract-videos') { |o| options[:extract_videos] = o }
         opts.on('-r', '--[no-]extract-result-images') { |o| options[:extract_result_images] = o }
         opts.on('-s', '--[no-]extract-result-videos') { |o| options[:extract_result_videos] = o }
+        opts.on('-f', '--[no-]produce-final-videos') { |o| options[:produce_final_videos] = o }
         opts.on('--seconds-before-match-start=SECONDS') { |o| options[:seconds_before_match_start] = o.to_i }
         opts.on('--seconds-match-length=SECONDS') { |o| options[:seconds_match_length] = o.to_i }
         opts.on('--seconds-after-match-end=SECONDS') { |o| options[:seconds_after_match_end] = o.to_i }
@@ -90,9 +92,27 @@ module FtcVideo
       File.join(Dir[options[:output_directory]], filename)
     end
 
+    def pretty_duration(seconds)
+      result = String.new
+
+      if seconds > 3600
+        result << "#{seconds.to_i / 3600}h "
+        seconds %= 3600
+      end
+
+      if seconds > 60
+        result << "#{seconds.to_i / 60}m "
+        seconds %= 60
+      end
+
+      result << format('%.1fs', seconds)
+
+      result
+    end
+
     def print_event_summary
       puts 'Event:'
-      puts "  League  : #{event.league.name}"
+      puts "  League  : #{event.league.name}" if event.league
       puts "  Name    : #{event.name}"
       puts "  Date    : #{event.start.strftime('%Y-%m-%d')}"
       puts
@@ -104,7 +124,7 @@ module FtcVideo
       puts
 
       puts 'Teams:'
-      event.league.each_team do |team|
+      event.each_team do |team|
         puts '  %5s %-40s %s' % [
           team.number,
           team.name || 'Unknown',
@@ -112,14 +132,29 @@ module FtcVideo
         ]
       end
       puts
+
+      puts 'Videos:'
+      video.files.each do |video_file|
+        puts '  %s, %s - %s, %s' % [
+          File.basename(video_file.filename),
+          video_file.start_time.strftime('%T'),
+          video_file.end_time.strftime('%T'),
+          pretty_duration(video_file.end_time - video_file.start_time)
+        ]
+      end
+      puts
+    end
+
+    def event_description
+      "#{event.name} on #{event.start.strftime('%b %-d, %Y')}"
     end
 
     def extract_match(match)
       puts "#{match.long_name} starting at #{match.started}:"
+      short_title = "#{match.short_description} at #{event_description}"
+      puts "  Short Title (#{short_title.size} characters):\n#{short_title}"
       long_title = "#{match.long_description} at #{match.event.name} "
       puts "  Long Title (#{long_title.size} characters):\n#{long_title}"
-      short_title = "#{match.short_description} at #{match.event.name} on February 15, 2020"
-      puts "  Short Title (#{short_title.size} characters):\n#{short_title}"
       FtcEvent::ALLIANCES.each do |alliance|
         puts "#{alliance.capitalize} Alliance, #{match.result_for(alliance)}:"
         match.each_team(alliance) do |team|
@@ -131,17 +166,35 @@ module FtcVideo
         print '  Extracting match video... '
 
         match_video_filename = output_filename("#{video.match_filename_prefix(match)}_match.mkv")
+        match_video_start_time = match.started - options[:seconds_before_match_start]
         match_video_duration =
           @options[:seconds_before_match_start] +
-          @options[:seconds_match_length] +
-          @options[:seconds_after_match_end]
+            @options[:seconds_match_length] +
+            @options[:seconds_after_match_end]
 
-        match_video = video.extract_video(
+        match_video_in_file = video.video_file_at(match_video_start_time, match_video_duration)
+        match_video_offset = match_video_in_file.time_offset(match_video_start_time)
+
+        match_video = match_video_in_file.movie.transcode(
           match_video_filename,
-          match.started - options[:seconds_before_match_start],
-          match_video_duration,
-          copy: @options[:copy]
+          {
+            custom: [
+              '-c:v', 'h264',
+              '-profile:v', 'baseline',
+              '-level', '3.0',
+              '-b:v', '6M',
+              '-c:a', 'aac',
+              '-pix_fmt', 'yuv420p',
+            ]
+          },
+          {
+            input_options: {
+              ss: match_video_offset.to_s,
+              t: match_video_duration.to_s
+            }
+          }
         )
+
         if match_video
           puts 'OK.'
         else
@@ -153,10 +206,10 @@ module FtcVideo
          metadata &&
          metadata['results'][match.short_identifier]
         score_screenshot_filename = output_filename("#{video.match_filename_prefix(match)}_score.png")
-        time_at = metadata['results'][match.short_identifier]
-        if time_at && time_at != 0
+        result_time = metadata['results'][match.short_identifier]
+        if result_time
           print '  Extracting match score screenshot... '
-          video.files.first.screenshot_at(score_screenshot_filename, time_at)
+          video.screenshot(score_screenshot_filename, result_time)
           score_screenshot = FFMPEG::Movie.new(score_screenshot_filename)
 
           if score_screenshot
@@ -171,16 +224,54 @@ module FtcVideo
             transcoder_options = { input_options: { loop: '1' } }
             score_movie = score_screenshot.transcode(
               score_movie_filename,
-              { vframes: 300, r: 30 },
+              {
+                custom: [
+                  '-f', 'lavfi',
+                  '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+                  '-map', '0:v:0',
+                  '-map', '1:a:0',
+                  '-c:v', 'h264',
+                  '-c:a', 'aac',
+                  '-pix_fmt', 'yuv420p',
+                  '-vframes', '300',
+                  '-r', '30',
+                ]
+              },
               transcoder_options
             )
+
+            if score_movie
+              puts 'OK.'
+            else
+              puts 'failed.'
+            end
           end
         end
 
-        if score_movie
-          puts 'OK.'
-        else
-          puts 'failed.'
+        if score_movie && options[:produce_final_videos]
+          print '  Making final video... '
+          final_movie_filename = output_filename("#{video.match_filename_prefix(match)}_final.mkv")
+          match_movie = FFMPEG::Movie.new(match_video_filename)
+          final_movie = match_movie.transcode(final_movie_filename, {
+            custom: [
+              '-i', score_movie_filename,
+              '-filter_complex', '[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[outv][outa]',
+              '-map', '[outv]',
+              '-map', '[outa]',
+              '-c:v', 'h264',
+              '-profile:v', 'baseline',
+              '-level', '3.0',
+              '-b:v', '6M',
+              '-c:a', 'aac',
+              '-pix_fmt', 'yuv420p',
+            ]
+          })
+
+          if final_movie
+            puts 'OK.'
+          else
+            puts 'failed.'
+          end
         end
       end
     end
@@ -199,25 +290,16 @@ module FtcVideo
     end
 
     def extract_matches
-      puts "Starting #{phase.name}..."
-      puts
-
       event.each_phase do |phase|
         extract_matches_for_phase(phase)
       end
-
-      puts 'Done.'
-      puts
     end
 
     def run
       FFMPEG.logger = logger
 
       print_event_summary
-
-      event.each_phase do |phase|
-        extract_matches_for_phase(phase)
-      end
+      extract_matches
     end
   end
 end
