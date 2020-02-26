@@ -145,13 +145,9 @@ module FtcVideo
       puts
     end
 
-    def event_description
-      "#{event.name} on #{event.start.strftime('%b %-d, %Y')}"
-    end
-
     def extract_match(match)
       puts "#{match.long_name} starting at #{match.started}:"
-      short_title = "#{match.short_description} at #{event_description}"
+      short_title = "#{match.short_description} at #{event.name} on #{match.started.strftime('%b %-d, %Y')}"
       puts "  Short Title (#{short_title.size} characters):\n#{short_title}"
       long_title = "#{match.long_description} at #{match.event.name} "
       puts "  Long Title (#{long_title.size} characters):\n#{long_title}"
