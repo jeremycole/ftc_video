@@ -6,16 +6,17 @@ module FtcVideo
   class MatchExtractor
     TIME_FROM_FILENAME = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/.freeze
 
-    def self.extract_time_from_filename(filename)
+    def self.extract_time_from_filename(filename, timezone)
       m = TIME_FROM_FILENAME.match(File.basename(filename).gsub(/[^\d]/, ''))
       return unless m
 
-      Time.new(m[1], m[2], m[3], m[4], m[5], m[6], '-08:00')
+      Time.new(m[1], m[2], m[3], m[4], m[5], m[6], timezone)
     end
 
     DEFAULT_OPTIONS = {
       event_db_filename: nil,
       video_filenames: [],
+      timezone: '-08:00',
       metadata_filename: nil,
       output_directory: '.',
       extract_videos: false,
@@ -23,6 +24,7 @@ module FtcVideo
       extract_result_videos: false,
       produce_final_videos: false,
       copy: false,
+      seconds_offset: 0,
       seconds_before_match_start: 10,
       seconds_match_length: 150,
       seconds_after_match_end: 30,
@@ -37,12 +39,14 @@ module FtcVideo
         opts.on('-h', '--help', 'Show this help.') { puts opts && puts && exit }
         opts.on('-d', '--event-db=DB', '') { |o| options[:event_db_filename] = o }
         opts.on('-v', '--video=FILE', '') { |o| options[:video_filenames] << o }
+        opts.on('-z', '--timezone=ZONE', '') { |o| options[:timezone] = o }
         opts.on('-m', '--metadata=FILE', '') { |o| options[:metadata_filename] = o }
         opts.on('-o', '--output-directory=DIR', '') { |o| options[:output_directory] = o }
         opts.on('-e', '--[no-]extract-videos') { |o| options[:extract_videos] = o }
         opts.on('-r', '--[no-]extract-result-images') { |o| options[:extract_result_images] = o }
         opts.on('-s', '--[no-]extract-result-videos') { |o| options[:extract_result_videos] = o }
         opts.on('-f', '--[no-]produce-final-videos') { |o| options[:produce_final_videos] = o }
+        opts.on('--seconds-offset=SECONDS') { |o| options[:seconds_offset] = o.to_i }
         opts.on('--seconds-before-match-start=SECONDS') { |o| options[:seconds_before_match_start] = o.to_i }
         opts.on('--seconds-match-length=SECONDS') { |o| options[:seconds_match_length] = o.to_i }
         opts.on('--seconds-after-match-end=SECONDS') { |o| options[:seconds_after_match_end] = o.to_i }
@@ -82,7 +86,7 @@ module FtcVideo
       @video = FtcVideo::Video.new(@event)
 
       options[:video_filenames].each do |filename|
-        video.add_file(filename, FtcVideo::MatchExtractor.extract_time_from_filename(filename))
+        video.add_file(filename, FtcVideo::MatchExtractor.extract_time_from_filename(filename, options[:timezone]))
       end
 
       @metadata = YAML.load_file(options[:metadata_filename]) if options[:metadata_filename]
@@ -162,7 +166,7 @@ module FtcVideo
         print '  Extracting match video... '
 
         match_video_filename = output_filename("#{video.match_filename_prefix(match)}_match.mkv")
-        match_video_start_time = match.started - options[:seconds_before_match_start]
+        match_video_start_time = match.started + options[:seconds_offset] - options[:seconds_before_match_start]
         match_video_duration =
           @options[:seconds_before_match_start] +
             @options[:seconds_match_length] +
